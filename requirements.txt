@@ -1,0 +1,9 @@
+torch
+transformers
+langchain
+langchain_community
+langchain-chroma
+sentence_transformers
+pypdf
+fastapi
+uvicorn
