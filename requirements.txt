@@ -3,7 +3,8 @@ uvicorn
 torch
 transformers
 langchain
-langchain_community
+langchain-community
 langchain-chroma
-sentence_transformers
+sentence-transformers
 pypdf
+chromadb

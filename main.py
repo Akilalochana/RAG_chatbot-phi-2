@@ -1,83 +1,69 @@
-# main.py
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from pydantic import BaseModel
-from langchain_community.llms import HuggingFacePipeline
-from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
-import torch
-
-from langchain.embeddings import HuggingFaceEmbeddings
-from langchain.schema.output_parser import StrOutputParser
+from fastapi.middleware.cors import CORSMiddleware
 from langchain_community.document_loaders import PyPDFLoader
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_chroma import Chroma
-from langchain.prompts import ChatPromptTemplate
+from langchain.text_splitter import CharacterTextSplitter
+from langchain_community.vectorstores import Chroma
+from langchain.embeddings import HuggingFaceEmbeddings
+from langchain_community.llms import HuggingFacePipeline
+from langchain.chains import RetrievalQA
+from transformers import pipeline
+import os
 
+# Initialize FastAPI
 app = FastAPI()
 
-# Load model and components (same as Colab)
-model_name = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
-tokenizer = AutoTokenizer.from_pretrained(model_name)
-model = AutoModelForCausalLM.from_pretrained(
-    model_name,
-    torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32
+# Enable CORS for all origins (change "*" to specific domain in production)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
-device = 0 if torch.cuda.is_available() else -1
-hf_pipeline = pipeline("text-generation", model=model, tokenizer=tokenizer, max_new_tokens=128,
-                       do_sample=True, temperature=0.7, top_p=0.9,
-                       pad_token_id=tokenizer.eos_token_id,
-                       return_full_text=False, device=device)
-llm = HuggingFacePipeline(pipeline=hf_pipeline)
-embedding_model = HuggingFaceEmbeddings(model_name="sentence-transformers/all-mpnet-base-v2")
-output_parser = StrOutputParser()
 
-# Load PDF and prepare Chroma vectorstore
-loader = PyPDFLoader("hotelwinwin_details.pdf")  # Replace with actual PDF path
-docs = loader.load()
-text_splitter = RecursiveCharacterTextSplitter(chunk_size=400, chunk_overlap=60,
-                                               separators=["\n\n", "\n", ".", "!", "?", ",", " ", ""])
-splits = text_splitter.split_documents(docs)
-vectorstore = Chroma.from_documents(documents=splits, embedding=embedding_model)
-retriever = vectorstore.as_retriever(search_type="similarity", search_kwargs={"k": 3})
-
-template = """You are Hotel Win Win's assistant. Answer only hotel-related questions using the context below.
-
-Context: {context}
-
-Question: {question}
-
-If the question is not about the hotel, respond: "I can only assist with Hotel Win Win inquiries."
-
-Answer:"""
-prompt = ChatPromptTemplate.from_template(template)
-
-def format_docs(docs):
-    context = "\n\n".join(doc.page_content for doc in docs)
-    return context[:1200] + "..." if len(context) > 1200 else context
-
-def clean_answer(answer):
-    for stop_token in ["User:", "Question:", "Assistant:"]:
-        if stop_token in answer:
-            answer = answer.split(stop_token)[0]
-    return answer.strip().split("\n")[0].strip()
-
-def get_user_friendly_response(question):
-    docs = retriever.get_relevant_documents(question)
-    context = format_docs(docs)
-    if not context or context.strip() == "":
-        return "I don't know."
-    user_prompt = prompt.format(context=context, question=question)
-    raw_response = llm.invoke(user_prompt)
-    response = clean_answer(raw_response)
-    if ("i don't know" in response.lower()) or (not response) or (len(response) < 5):
-        return "I don't know."
-    return response
-
-# Define input model
+# Define request body structure
 class Query(BaseModel):
     question: str
 
-# API route
+# Load PDF and prepare vector store (this runs on startup)
+print("📄 Loading and indexing PDF...")
+pdf_path = "hotelwinwin_details.pdf"
+loader = PyPDFLoader(pdf_path)
+pages = loader.load_and_split()
+
+text_splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
+documents = text_splitter.split_documents(pages)
+
+embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+
+persist_directory = "chroma_db"
+vectordb = Chroma.from_documents(documents, embedding=embeddings, persist_directory=persist_directory)
+vectordb.persist()
+retriever = vectordb.as_retriever()
+
+# Initialize LLM
+print("🤖 Loading TinyLlama model...")
+pipe = pipeline(
+    "text-generation",
+    model="TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+    max_new_tokens=256,
+    temperature=0.7,
+    top_p=0.95,
+    repetition_penalty=1.1
+)
+
+llm = HuggingFacePipeline(pipeline=pipe)
+
+# Combine LLM + Retriever into RAG chain
+qa_chain = RetrievalQA.from_chain_type(
+    llm=llm,
+    retriever=retriever,
+    return_source_documents=False
+)
+
+# Endpoint for chatbot
 @app.post("/chat")
-def chat(query: Query):
-    answer = get_user_friendly_response(query.question)
-    return {"response": answer}
+async def chat(query: Query):
+    response = qa_chain.run(query.question)
+    return {"answer": response}
