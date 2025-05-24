@@ -1,9 +1,10 @@
-fastapi
-uvicorn
-torch
-transformers
-langchain
-langchain_community
-langchain-chroma
-sentence_transformers
-pypdf
+fastapi==0.110.2
+uvicorn==0.29.0
+torch==2.2.2
+transformers==4.39.3
+langchain==0.1.16
+langchain_community==0.0.36
+langchain-chroma==0.1.0
+sentence-transformers==2.6.1
+pypdf==4.2.0
+# chromadb is pulled by langchain-chroma, do not add explicitly!
