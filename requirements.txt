@@ -1,10 +1,10 @@
-fastapi
-uvicorn
-torch
-transformers
-langchain
-langchain-community
-langchain-chroma
-sentence-transformers
-pypdf
-chromadb
+  torch
+  transformers
+  numpy
+  langchain
+  langchain_community
+  langchain-chroma
+  sentence_transformers
+  pypdf
+  fastapi
+  uvicorn
